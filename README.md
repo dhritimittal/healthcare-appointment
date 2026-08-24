@@ -57,6 +57,10 @@ this catches schema/env issues early:
    - Doctor creation form.
    - Leave day marking, which automatically triggers reschedule notifications.
 
+6. **Google Calendar Integration (Scoped Down)**
+   - Backend logic implemented in `src/lib/gcal.ts` (OAuth client, event creation).
+   - *Note: As permitted by the spec, the OAuth consent screen wiring was skipped due to time constraints, but the core integration logic is written and documented.*
+
 ## 4. System Design Write-Up
 
 Please see [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md) for the full 800-word system design document detailing:

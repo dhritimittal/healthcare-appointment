@@ -1,0 +1,114 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PATIENT
+  DOCTOR
+  ADMIN
+}
+
+enum AppointmentStatus {
+  PENDING_CONFIRMATION // slot held while patient fills symptom form
+  CONFIRMED
+  CANCELLED
+  NEEDS_RESCHEDULE // doctor went on leave, patient must rebook
+  COMPLETED
+}
+
+enum Urgency {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role
+  createdAt    DateTime @default(now())
+
+  doctorProfile   DoctorProfile? // only if role = DOCTOR
+  appointments    Appointment[]  @relation("PatientAppointments")
+  notifications   Notification[]
+}
+
+model DoctorProfile {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id])
+  specialisation String
+  // working hours stored as JSON: { "mon": ["09:00","17:00"], "tue": [...], ... }
+  workingHours   Json
+  slotDurationMin Int     @default(30)
+
+  leaveDays    LeaveDay[]
+  appointments Appointment[] @relation("DoctorAppointments")
+
+  @@index([specialisation])
+}
+
+model LeaveDay {
+  id       String        @id @default(cuid())
+  doctorId String
+  doctor   DoctorProfile @relation(fields: [doctorId], references: [id])
+  date     DateTime // store as date-only (midnight UTC)
+
+  @@unique([doctorId, date])
+}
+
+model Appointment {
+  id       String @id @default(cuid())
+  patientId String
+  patient   User   @relation("PatientAppointments", fields: [patientId], references: [id])
+  doctorId  String
+  doctor    DoctorProfile @relation("DoctorAppointments", fields: [doctorId], references: [id])
+
+  slotStart DateTime
+  slotEnd   DateTime
+  status    AppointmentStatus @default(PENDING_CONFIRMATION)
+
+  // pre-visit
+  symptomText      String?
+  preVisitSummary  Json?    // { urgency, chiefComplaint, suggestedQuestions: [] }
+  preVisitStatus   String?  @default("pending") // pending | ready | failed
+
+  // post-visit
+  postVisitNotes   String?
+  prescription     String?
+  postVisitSummary Json?    // { summary, medicationSchedule, followUpSteps }
+  postVisitStatus  String?  @default("pending")
+
+  calendarEventIdPatient String?
+  calendarEventIdDoctor  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // THE key constraint: a doctor cannot have two appointments at the same
+  // start time. Combined with a DB transaction on create, this is what
+  // makes double-booking impossible even under concurrent requests.
+  @@unique([doctorId, slotStart])
+  @@index([patientId])
+  @@index([doctorId, slotStart])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String   // booking_confirmation | cancellation | reminder | leave_conflict | medication_reminder
+  channel   String   // email | in_app
+  content   String
+  status    String   @default("pending") // pending | sent | failed
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+  sentAt    DateTime?
+}

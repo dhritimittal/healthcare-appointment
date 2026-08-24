@@ -1,78 +1,76 @@
-# Healthcare Appointment Manager — Starter Backend
+# Healthcare Appointment Manager
 
-This scaffold contains the **highest-risk, most-graded parts already built**:
-double-booking-safe booking, LLM integration with failure handling, doctor
-leave conflict handling, role-based auth, and a notification worker pattern.
-What's left is mostly UI pages wired to these routes — lower risk, faster to build.
+A full-stack healthcare appointment platform built with Next.js 14, featuring robust concurrency control, role-based authentication, and AI-powered visit summaries. 
 
-## 1. Setup (do this first, ~15 min)
+This project was engineered to solve real-world scheduling complexities, prioritizing data integrity (preventing double-bookings), graceful failure handling for third-party APIs, and async background processing.
 
-```bash
-npm install
-```
+## 🚀 Tech Stack
 
-Create free accounts and fill in `.env` (copy from `.env.example`):
-- **DB**: [neon.tech](https://neon.tech) — new project → copy connection string → `DATABASE_URL`
-- **LLM**: [aistudio.google.com/apikey](https://aistudio.google.com/apikey) → `GEMINI_API_KEY`
-- **Email**: [resend.com](https://resend.com) → API key → `RESEND_API_KEY` (their test domain works without verifying your own)
-- **Auth secret**: run `openssl rand -base64 32` → `NEXTAUTH_SECRET`
+- **Framework:** Next.js 14 (App Router), React
+- **Language:** TypeScript
+- **Database:** PostgreSQL (hosted on Neon)
+- **ORM:** Prisma
+- **Authentication:** NextAuth.js (Credentials Provider + JWT)
+- **AI Integration:** Google Gemini API
+- **Email/Notifications:** Resend API
 
-```bash
-npx prisma migrate dev --name init
-npm run prisma:seed   # creates admin@clinic.test / admin123 and doctor@clinic.test / doctor123
-npm run dev
-```
+## 🏗️ Architecture & Core Systems
 
-Test the backend immediately with curl/Postman before building any UI —
-this catches schema/env issues early:
+### 1. Concurrency-Safe Booking Engine
+Handling simultaneous booking requests is a classic race condition problem. This system prevents double-booking at the database level:
+- **Unique Constraints:** The `Appointment` table enforces a strict DB-level `@@unique([doctorId, slotStart])` constraint.
+- **Transactions:** The slot availability check and insert operation are wrapped in a single Prisma `$transaction`.
+- **Race Condition Handling:** If the transaction window is breached by simultaneous requests, the unique constraint catches the duplicate insert, throwing a `P2002` error which is cleanly caught and presented to the user as a 409 Conflict, ensuring the system never enters an invalid state.
 
-```bash
-# Login as admin, then create a doctor, then as patient POST /api/book, then /api/symptoms
-```
+### 2. Failure-Tolerant AI Summaries
+The platform uses the Gemini LLM to generate pre-visit symptom analysis and patient-friendly post-visit clinical notes. 
+- **Non-blocking critical paths:** The booking confirmation flow must *never* fail just because a third-party AI API is down. If the Gemini API times out or rate-limits, the appointment is still successfully confirmed, and the AI summary is marked as `failed`. 
+- **Manual Retries:** Doctors are provided with a UI mechanism to manually regenerate failed LLM summaries later.
 
-## 2. What's already built
+### 3. Slot Holds & Background Workers
+- **Optimistic Slot Holds:** When a patient selects a time, the slot is immediately created with a `PENDING_CONFIRMATION` status. This reserves the slot while they fill out their symptom forms.
+- **Cron Cleanup Job:** A serverless cron job runs periodically to sweep the database, expiring stale holds (older than 15 minutes) and sending queued email notifications (e.g., medication reminders and leave-conflict rescheduling notices).
 
-| Piece | File | Notes |
-|---|---|---|
-| Schema + double-booking constraint | `prisma/schema.prisma` | `@@unique([doctorId, slotStart])` |
-| Auth (role-based) | `src/lib/auth.ts` | NextAuth credentials provider |
-| Booking (transaction-safe) | `src/app/api/book/route.ts` | Read this file's comments — this is your system-design write-up material |
-| Pre-visit LLM summary | `src/app/api/symptoms/route.ts` + `src/lib/gemini.ts` | Booking confirms even if LLM fails |
-| Post-visit LLM summary | `src/app/api/visit-notes/route.ts` | Same failure-tolerant pattern |
-| Admin doctor CRUD + search | `src/app/api/doctors/route.ts` | |
-| Leave day + patient notification | `src/app/api/doctors/[id]/leave/route.ts` | |
-| Notification worker (cron) | `src/app/api/reminders/check/route.ts` + `vercel.json` | Runs every 10 min on Vercel |
+### 4. Role-Based Access Control (RBAC)
+The application defines strict boundaries for three distinct user types:
+- **Patients:** Can browse doctors, view available slots dynamically filtered by working hours/leaves, and book appointments.
+- **Doctors:** Have a dashboard to view upcoming appointments, read AI-generated symptom summaries, and submit clinical notes.
+- **Admins:** Manage clinic staff, onboard new doctors, and mark leave days (which automatically cascades to reschedule overlapping appointments).
 
-## 3. What is Built (Completed)
+## 💻 Local Setup
 
-1. **`/login` and `/register` pages** — patient registration and role-based login.
-2. **`/patient` portal**:
-   - Doctor search and dynamic slot picker based on working hours.
-   - Symptom form creating appointments with `PENDING_CONFIRMATION` slot holds.
-   - View own appointments.
-3. **`/doctor` portal**:
-   - View appointments and pre-visit LLM summaries.
-   - Submit post-visit clinical notes, kicking off patient-friendly LLM summaries.
-4. **`/admin` portal**:
-   - Doctor creation form.
-   - Leave day marking, which automatically triggers reschedule notifications.
+1. **Clone & Install**
+   ```bash
+   git clone <your-repo-url>
+   cd healthcare-appointment
+   npm install
+   ```
 
-6. **Google Calendar Integration (Scoped Down)**
-   - Backend logic implemented in `src/lib/gcal.ts` (OAuth client, event creation).
-   - *Note: As permitted by the spec, the OAuth consent screen wiring was skipped due to time constraints, but the core integration logic is written and documented.*
+2. **Environment Variables**
+   Create a `.env` file in the root directory (use `.env.example` as a template):
+   ```env
+   DATABASE_URL="your-neon-postgres-url"
+   NEXTAUTH_SECRET="your-random-secret"
+   NEXTAUTH_URL="http://localhost:3000"
+   GEMINI_API_KEY="your-google-gemini-key"
+   RESEND_API_KEY="your-resend-key"
+   ```
 
-## 4. System Design Write-Up
+3. **Database Setup**
+   ```bash
+   # Apply schema to database
+   npx prisma migrate dev --name init
+   
+   # Seed the database with an Admin and a Doctor account
+   npm run prisma:seed
+   ```
 
-Please see [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md) for the full 800-word system design document detailing:
-- Double-booking prevention
-- Slot holds
-- Failure-tolerant AI integration
-- Asynchronous notification worker pattern
-- Google Calendar integration strategy
+4. **Run the Development Server**
+   ```bash
+   npm run dev
+   ```
+   Open `http://localhost:3000` to view the application.
 
-## 5. Deploy
-
-```bash
-git push  # then import repo in Vercel dashboard
-```
-Add all `.env` vars in Vercel project settings. Vercel Cron picks up `vercel.json` automatically on the Pro trial or Hobby plan (check current Vercel free-tier cron limits).
+## 🔮 Future Enhancements
+- **Google Calendar Integration:** A backend OAuth integration is scoped out (`src/lib/gcal.ts`) to sync confirmed appointments directly to a doctor's primary Google Calendar.
+- **WebSockets:** Upgrading the polling/refresh mechanisms to real-time WebSockets for instant booking reflections across clients.
